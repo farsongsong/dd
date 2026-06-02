@@ -1,8 +1,8 @@
-streamlit
-rdkit
-scikit-learn
-xgboost
-shap
-plotly
-pandas
-numpy
+streamlit==1.32.0
+rdkit==2023.9.5
+scikit-learn==1.4.0
+xgboost==2.0.3
+shap==0.44.1
+plotly==5.18.0
+pandas==2.2.0
+numpy==1.26.4
