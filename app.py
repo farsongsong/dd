@@ -1,6 +1,6 @@
 # ============================================================
 # 분자 끓는점 예측 웹앱 — Streamlit
-# Streamlit Cloud 배포 버전 (X11 없는 환경 대응)
+# Streamlit Cloud 배포 버전
 # ============================================================
 
 import streamlit as st
@@ -136,7 +136,7 @@ def train_models():
         mol_h = Chem.AddHs(mol)
         AllChem.EmbedMolecule(mol_h, AllChem.ETKDGv3())
         records.append({
-            "name":name,"smiles":smi,
+            "name":name, "smiles":smi,
             "MW":        round(Descriptors.MolWt(mol),3),
             "LogP":      round(Descriptors.MolLogP(mol),4),
             "TPSA":      round(Descriptors.TPSA(mol),2),
@@ -147,7 +147,7 @@ def train_models():
                             if a.GetAtomicNum()==8 and a.GetTotalNumHs()>0),
             "RotBonds":  rdMolDescriptors.CalcNumRotatableBonds(mol),
             "HeavyAtoms":mol.GetNumHeavyAtoms(),
-            "bp_exp":bp,"HB_type":hb
+            "bp_exp":bp, "HB_type":hb
         })
     df = pd.DataFrame(records)
     X_cls = df[FEATURES_CLS]
@@ -210,7 +210,7 @@ def generate_reasons(feats, hb_type, preds, real_bp=None):
         f"③ LogP={feats['LogP']:.2f} (중요도 3위) — {logp_desc}"))
 
     if preds and real_bp:
-        errs = {mn: abs(v-real_bp) for mn,v in preds.items()}
+        errs  = {mn: abs(v-real_bp) for mn,v in preds.items()}
         best  = min(errs, key=errs.get)
         worst = max(errs, key=errs.get)
         hb_note = (
@@ -236,7 +236,8 @@ with st.sidebar:
     input_mode = st.radio(
         "입력 방법 선택",
         ["분자 이름 선택", "SMILES 직접 입력"],
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        index=0
     )
     st.markdown("---")
     st.markdown("""
@@ -394,7 +395,7 @@ if run:
                 rows.append({"모델":"★ 실제값",
                              "예측(°C)":f"{real_bp:.1f}", "오차":"—"})
             st.dataframe(pd.DataFrame(rows), hide_index=True,
-                        use_container_width=True, height=260)
+                        use_container_width=True, height=280)
             if real_bp:
                 best_m = min(preds, key=lambda k: abs(preds[k]-real_bp))
                 best_e = abs(preds[best_m]-real_bp)
@@ -435,9 +436,9 @@ if run:
         st.markdown("---")
         st.markdown("### 📐 화학Ⅱ 이론 연결")
         hb_theory = {
-            "Strong": "**수소결합(Hydrogen Bond)**\n\nN·O·F에 결합한 H → 인접 분자의 비공유 전자쌍과 강한 인력 형성. 분자간 힘 중 가장 강함 → 끓는점 높음. 예시: 물(100°C), 에탄올(78°C), 글리세롤(290°C)",
-            "Weak":   "**쌍극자-쌍극자 힘(Dipole-Dipole Force)**\n\n극성 결합 존재하나 수소결합 공여체(HBD) 없음. 수소결합보다 약하고 분산력보다 강한 중간 세기. 예시: 아세톤(56°C), DMSO(189°C)",
-            "NonPolar":"**분산력(London Dispersion Force)**\n\n모든 분자에 존재하는 순간 쌍극자 기반 인력. 분자량이 클수록 강함 → MW와 끓는점 비례. 예시: 메탄(-161°C) → 옥탄(125°C)"
+            "Strong": "**수소결합(Hydrogen Bond)**\n\nN·O·F에 결합한 H → 인접 분자의 비공유 전자쌍과 강한 인력 형성. 분자간 힘 중 가장 강함 → 끓는점 높음.\n\n예시: 물(100°C), 에탄올(78°C), 글리세롤(290°C)",
+            "Weak":   "**쌍극자-쌍극자 힘(Dipole-Dipole Force)**\n\n극성 결합 존재하나 수소결합 공여체(HBD) 없음. 수소결합보다 약하고 분산력보다 강한 중간 세기.\n\n예시: 아세톤(56°C), DMSO(189°C)",
+            "NonPolar":"**분산력(London Dispersion Force)**\n\n모든 분자에 존재하는 순간 쌍극자 기반 인력. 분자량이 클수록 강함 → MW와 끓는점 비례.\n\n예시: 메탄(-161°C) → 옥탄(125°C) (MW 증가에 따른 끓는점 상승)"
         }
         st.info(hb_theory[hb_pred])
 
@@ -504,29 +505,24 @@ if run:
     # ═══ TAB 4 ═══════════════════════════════════════════════
     with tab4:
         st.markdown("**분자 정보 요약**")
-        summary_data = {
-            "항목": ["SMILES","분자량","LogP","TPSA","HBD / HBA",
-                     "OH기 수","회전 결합","중원자 수",
-                     "수소결합 유형","RF 예측 끓는점","앙상블 평균"],
-            "값": [
-                input_smi,
-                f"{feats['MW']:.3f} g/mol",
-                f"{feats['LogP']:.4f}",
-                f"{feats['TPSA']:.2f} Å²",
-                f"{feats['HBD']} / {feats['HBA']}",
-                str(feats['NumOH']),
-                str(feats['RotBonds']),
-                str(feats['HeavyAtoms']),
-                f"{hb_emoji} {hb_pred} ({hb_ko})",
-                f"{rf_pred:.1f}°C",
-                f"{ensemble:.1f}°C",
-            ]
-        }
+        summary_items = [
+            ("SMILES", input_smi),
+            ("분자량", f"{feats['MW']:.3f} g/mol"),
+            ("LogP", f"{feats['LogP']:.4f}"),
+            ("TPSA", f"{feats['TPSA']:.2f} Å²"),
+            ("HBD / HBA", f"{feats['HBD']} / {feats['HBA']}"),
+            ("OH기 수", str(feats['NumOH'])),
+            ("회전 결합", str(feats['RotBonds'])),
+            ("중원자 수", str(feats['HeavyAtoms'])),
+            ("수소결합 유형", f"{hb_emoji} {hb_pred} ({hb_ko})"),
+            ("RF 예측 끓는점", f"{rf_pred:.1f}°C"),
+            ("앙상블 평균", f"{ensemble:.1f}°C"),
+        ]
         if real_bp:
-            summary_data["항목"].append("실제 끓는점")
-            summary_data["값"].append(f"{real_bp:.1f}°C")
-        st.dataframe(pd.DataFrame(summary_data), hide_index=True,
-                    use_container_width=True)
+            summary_items.append(("실제 끓는점", f"{real_bp:.1f}°C"))
+
+        summary_df = pd.DataFrame(summary_items, columns=["항목","값"])
+        st.dataframe(summary_df, hide_index=True, use_container_width=True)
 
         st.markdown("---")
         st.info(
