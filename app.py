@@ -1,6 +1,6 @@
 # ============================================================
 # 분자 끓는점 예측 웹앱 — Streamlit
-# Streamlit Cloud 배포 버전
+# Streamlit Cloud 배포 버전 (켈빈/섭씨 전환 지원)
 # ============================================================
 
 import streamlit as st
@@ -22,7 +22,6 @@ import shap
 import warnings
 warnings.filterwarnings('ignore')
 
-# ── 페이지 설정 ──────────────────────────────────────────────
 st.set_page_config(
     page_title="분자 끓는점 예측 대시보드",
     page_icon="⚗️",
@@ -70,6 +69,21 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════
+# 온도 단위 변환 함수
+# ══════════════════════════════════════════════════════════════
+def c_to_k(val):
+    return val + 273.15
+
+def fmt(val, kelvin=True):
+    """섭씨값을 받아 설정에 따라 K 또는 °C로 표시"""
+    if kelvin:
+        return f"{c_to_k(val):.1f} K"
+    return f"{val:.1f} °C"
+
+def fmt_label(kelvin=True):
+    return "끓는점 (K)" if kelvin else "끓는점 (°C)"
 
 # ══════════════════════════════════════════════════════════════
 # 데이터
@@ -158,17 +172,13 @@ def train_models():
 
     clf = RandomForestClassifier(n_estimators=200, random_state=42)
     clf.fit(X_cls, y_cls)
-
     rf = RandomForestRegressor(n_estimators=300, max_depth=5, random_state=42)
     rf.fit(X_reg, y_reg)
-
     xgb_m = xgb.XGBRegressor(n_estimators=200, max_depth=3,
                                learning_rate=0.2, random_state=42, verbosity=0)
     xgb_m.fit(X_reg, y_reg)
-
     svr = Pipeline([('sc',StandardScaler()),('svr',SVR(kernel='rbf',C=10,epsilon=1.0))])
     svr.fit(X_reg, y_reg)
-
     ridge = Pipeline([('sc',StandardScaler()),('r',Ridge(alpha=10))])
     ridge.fit(X_reg, y_reg)
 
@@ -179,8 +189,10 @@ def train_models():
     return clf, le, rf, xgb_m, svr, ridge, df, shap_mean
 
 
-def generate_reasons(feats, hb_type, preds, real_bp=None):
+def generate_reasons(feats, hb_type, preds, real_bp=None, kelvin=True):
     reasons = []
+    unit = "K" if kelvin else "°C"
+
     if hb_type == "Strong":
         oh_str = f"OH기 {feats['NumOH']}개" if feats['NumOH'] > 0 else ""
         reasons.append(("🔴 분류 근거 — Strong HB",
@@ -209,7 +221,7 @@ def generate_reasons(feats, hb_type, preds, real_bp=None):
         f"② NumOH={feats['NumOH']} (중요도 2위) — OH기↑ = 수소결합↑ = 끓는점↑  "
         f"③ LogP={feats['LogP']:.2f} (중요도 3위) — {logp_desc}"))
 
-    if preds and real_bp:
+    if preds and real_bp is not None:
         errs  = {mn: abs(v-real_bp) for mn,v in preds.items()}
         best  = min(errs, key=errs.get)
         worst = max(errs, key=errs.get)
@@ -221,8 +233,8 @@ def generate_reasons(feats, hb_type, preds, real_bp=None):
             "쌍극자 특성이 분자마다 달라 트리 모델이 유리한 경향"
         )
         reasons.append(("🏆 모델 비교 분석",
-            f"가장 근접: {best} (오차 ±{errs[best]:.1f}°C) | "
-            f"최대 오차: {worst} (±{errs[worst]:.1f}°C)  {hb_note}"))
+            f"가장 근접: {best} (오차 ±{errs[best]:.1f}{unit}) | "
+            f"최대 오차: {worst} (±{errs[worst]:.1f}{unit})  {hb_note}"))
     return reasons
 
 
@@ -240,6 +252,14 @@ with st.sidebar:
         index=0
     )
     st.markdown("---")
+    st.markdown("### 🌡️ 온도 단위")
+    use_kelvin = st.toggle("켈빈(K) 사용", value=True,
+                           help="화학Ⅱ 절대온도 기준. K = °C + 273.15")
+    if use_kelvin:
+        st.info("켈빈(K) 단위 — 절대온도\n\n물의 끓는점 = **373.15 K**")
+    else:
+        st.info("섭씨(°C) 단위\n\n물의 끓는점 = **100.0 °C**")
+    st.markdown("---")
     st.markdown("""
 ### 모델 정보
 - **RandomForest** — 앙상블 트리
@@ -250,7 +270,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("훈련 분자: **39개**  \nCV 분류 정확도: **87.1%**")
     st.markdown("---")
-    st.caption("화학Ⅱ 수행평가 · 31303 권송현")
+    st.caption("화학Ⅱ 수행평가 · 21303 권송현")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -313,11 +333,17 @@ if run:
     ridge_pred = float(ridge.predict(X_reg_inp)[0])
     ensemble   = float(np.mean([rf_pred, xgb_pred, svr_pred, ridge_pred]))
 
-    preds = {"RandomForest":rf_pred,"XGBoost":xgb_pred,
-             "SVR(RBF)":svr_pred,"Ridge":ridge_pred}
+    # 섭씨 기준 predictions (내부 계산용)
+    preds_c = {"RandomForest":rf_pred,"XGBoost":xgb_pred,
+               "SVR(RBF)":svr_pred,"Ridge":ridge_pred}
 
     hb_emoji = {"Strong":"🔴","Weak":"🟡","NonPolar":"🔵"}[hb_pred]
     hb_ko    = {"Strong":"강한 수소결합","Weak":"쌍극자-쌍극자","NonPolar":"분산력"}[hb_pred]
+    unit_str = "K" if use_kelvin else "°C"
+
+    # 표시용 변환 함수
+    def disp(val): return fmt(val, use_kelvin)
+    def disp_real(): return fmt(real_bp, use_kelvin) if real_bp is not None else "-"
 
     tab1, tab2, tab3, tab4 = st.tabs(
         ["📊 예측 결과", "🔬 예측 근거", "📈 특성 분석", "🧪 분자 정보"]
@@ -325,6 +351,7 @@ if run:
 
     # ═══ TAB 1 ═══════════════════════════════════════════════
     with tab1:
+        real_disp = c_to_k(real_bp) if (use_kelvin and real_bp is not None) else real_bp
         st.markdown(f"""
         <div class="metric-row">
             <div class="metric-box">
@@ -347,72 +374,92 @@ if run:
                 <div class="metric-val" style="font-size:18px;">{hb_emoji} {hb_pred}</div>
                 <div class="metric-label">{hb_ko}</div>
             </div>
+            {"" if real_bp is None else f'''
+            <div class="metric-box">
+                <div class="metric-val" style="font-size:20px;">{disp_real()}</div>
+                <div class="metric-label">실제 끓는점</div>
+            </div>'''}
         </div>
         """, unsafe_allow_html=True)
 
         c1, c2 = st.columns([3, 2])
         with c1:
-            model_names = list(preds.keys())
-            pred_vals   = list(preds.values())
+            model_names = list(preds_c.keys())
+            # 표시값 (K 또는 °C)
+            pred_disp = [c_to_k(v) if use_kelvin else v for v in preds_c.values()]
             fig_bar = go.Figure()
             fig_bar.add_trace(go.Bar(
-                x=model_names, y=pred_vals,
+                x=model_names, y=pred_disp,
                 marker_color=[MODEL_COLORS[m] for m in model_names],
                 marker_line_color='white', marker_line_width=1.5,
-                text=[f"{v:.1f}°C" for v in pred_vals],
+                text=[f"{v:.1f} {unit_str}" for v in pred_disp],
                 textposition='outside',
                 textfont=dict(size=13, color='#1e293b'),
             ))
             if real_bp is not None:
+                real_line = c_to_k(real_bp) if use_kelvin else real_bp
                 fig_bar.add_hline(
-                    y=real_bp, line_dash="dash",
+                    y=real_line, line_dash="dash",
                     line_color="#e53e3e", line_width=2,
-                    annotation_text=f"실제 {real_bp}°C",
+                    annotation_text=f"실제 {real_line:.1f} {unit_str}",
                     annotation_font_color="#e53e3e",
                     annotation_font_size=12
                 )
             fig_bar.update_layout(
                 height=320, plot_bgcolor='white', paper_bgcolor='white',
                 margin=dict(t=40,b=20,l=20,r=20),
-                yaxis_title="끓는점 (°C)",
+                yaxis_title=fmt_label(use_kelvin),
                 font=dict(size=13, color="#1e293b"),
                 yaxis=dict(gridcolor='#f1f5f9'),
                 xaxis=dict(gridcolor='white'),
                 showlegend=False,
-                title=dict(text="5종 모델 끓는점 예측",
+                title=dict(text=f"5종 모델 끓는점 예측 ({unit_str})",
                            font=dict(size=14, color='#1e3a5f'))
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
         with c2:
             rows = []
-            for mn, val in preds.items():
-                err = f"±{abs(val-real_bp):.1f}" if real_bp else "-"
-                rows.append({"모델":mn, "예측(°C)":f"{val:.1f}", "오차":err})
-            rows.append({"모델":"앙상블 평균", "예측(°C)":f"{ensemble:.1f}",
-                         "오차":f"±{abs(ensemble-real_bp):.1f}" if real_bp else "-"})
-            if real_bp:
-                rows.append({"모델":"★ 실제값",
-                             "예측(°C)":f"{real_bp:.1f}", "오차":"—"})
+            for mn, val_c in preds_c.items():
+                val_disp = c_to_k(val_c) if use_kelvin else val_c
+                err = abs(val_c - real_bp) if real_bp is not None else None
+                rows.append({
+                    "모델": mn,
+                    f"예측({unit_str})": f"{val_disp:.1f}",
+                    "오차": f"±{err:.1f}" if err is not None else "-"
+                })
+            ens_disp = c_to_k(ensemble) if use_kelvin else ensemble
+            rows.append({
+                "모델": "앙상블 평균",
+                f"예측({unit_str})": f"{ens_disp:.1f}",
+                "오차": f"±{abs(ensemble-real_bp):.1f}" if real_bp is not None else "-"
+            })
+            if real_bp is not None:
+                real_disp_val = c_to_k(real_bp) if use_kelvin else real_bp
+                rows.append({
+                    "모델": "★ 실제값",
+                    f"예측({unit_str})": f"{real_disp_val:.1f}",
+                    "오차": "—"
+                })
             st.dataframe(pd.DataFrame(rows), hide_index=True,
                         use_container_width=True, height=280)
-            if real_bp:
-                best_m = min(preds, key=lambda k: abs(preds[k]-real_bp))
-                best_e = abs(preds[best_m]-real_bp)
-                st.success(f"🏆 최고 성능: **{best_m}** (오차 ±{best_e:.1f}°C)")
+            if real_bp is not None:
+                best_m = min(preds_c, key=lambda k: abs(preds_c[k]-real_bp))
+                best_e = abs(preds_c[best_m]-real_bp)
+                st.success(f"🏆 최고 성능: **{best_m}** (오차 ±{best_e:.1f}{unit_str})")
 
-        if real_bp:
-            errs_list = [abs(preds[m]-real_bp) for m in model_names]
+        if real_bp is not None:
+            errs_list = [abs(preds_c[m]-real_bp) for m in model_names]
             fig_e = go.Figure(go.Bar(
                 x=errs_list, y=model_names, orientation='h',
                 marker_color=[MODEL_COLORS[m] for m in model_names],
-                text=[f"±{e:.1f}°C" for e in errs_list],
+                text=[f"±{e:.1f}{unit_str}" for e in errs_list],
                 textposition='outside',
             ))
             fig_e.update_layout(
                 height=200, plot_bgcolor='white', paper_bgcolor='white',
-                margin=dict(t=30,b=10,l=10,r=60),
-                xaxis_title="오차 (°C)",
+                margin=dict(t=30,b=10,l=10,r=70),
+                xaxis_title=f"오차 ({unit_str})",
                 font=dict(size=12, color="#1e293b"),
                 xaxis=dict(gridcolor='#f1f5f9'),
                 showlegend=False,
@@ -424,7 +471,7 @@ if run:
     # ═══ TAB 2 ═══════════════════════════════════════════════
     with tab2:
         st.markdown("### 🔬 이 분자를 왜 이렇게 예측했나?")
-        reasons = generate_reasons(feats, hb_pred, preds, real_bp)
+        reasons = generate_reasons(feats, hb_pred, preds_c, real_bp, use_kelvin)
         for title, text in reasons:
             st.markdown(f"""
             <div class="reason-block">
@@ -436,9 +483,9 @@ if run:
         st.markdown("---")
         st.markdown("### 📐 화학Ⅱ 이론 연결")
         hb_theory = {
-            "Strong": "**수소결합(Hydrogen Bond)**\n\nN·O·F에 결합한 H → 인접 분자의 비공유 전자쌍과 강한 인력 형성. 분자간 힘 중 가장 강함 → 끓는점 높음.\n\n예시: 물(100°C), 에탄올(78°C), 글리세롤(290°C)",
-            "Weak":   "**쌍극자-쌍극자 힘(Dipole-Dipole Force)**\n\n극성 결합 존재하나 수소결합 공여체(HBD) 없음. 수소결합보다 약하고 분산력보다 강한 중간 세기.\n\n예시: 아세톤(56°C), DMSO(189°C)",
-            "NonPolar":"**분산력(London Dispersion Force)**\n\n모든 분자에 존재하는 순간 쌍극자 기반 인력. 분자량이 클수록 강함 → MW와 끓는점 비례.\n\n예시: 메탄(-161°C) → 옥탄(125°C) (MW 증가에 따른 끓는점 상승)"
+            "Strong": f"**수소결합(Hydrogen Bond)**\n\nN·O·F에 결합한 H → 인접 분자의 비공유 전자쌍과 강한 인력 형성. 분자간 힘 중 가장 강함 → 끓는점 높음.\n\n예시: 물({fmt(100,use_kelvin)}), 에탄올({fmt(78.4,use_kelvin)}), 글리세롤({fmt(290,use_kelvin)})",
+            "Weak":   f"**쌍극자-쌍극자 힘(Dipole-Dipole Force)**\n\n극성 결합 존재하나 수소결합 공여체(HBD) 없음. 수소결합보다 약하고 분산력보다 강한 중간 세기.\n\n예시: 아세톤({fmt(56.1,use_kelvin)}), DMSO({fmt(189,use_kelvin)})",
+            "NonPolar":f"**분산력(London Dispersion Force)**\n\n모든 분자에 존재하는 순간 쌍극자 기반 인력. 분자량이 클수록 강함 → MW와 끓는점 비례.\n\n예시: 메탄({fmt(-161.5,use_kelvin)}) → 옥탄({fmt(125.7,use_kelvin)})"
         }
         st.info(hb_theory[hb_pred])
 
@@ -449,13 +496,12 @@ if run:
             feat_names = ["MW","LogP","TPSA","HBD","HBA","NumOH","RotBonds","HeavyAtoms"]
             feat_descs = ["분자량","소수성/친수성","극성 표면적","HB 공여체",
                           "HB 수용체","OH기 수","회전 결합","중원자 수"]
-            feat_df = pd.DataFrame({
+            st.markdown("**분자 특성값**")
+            st.dataframe(pd.DataFrame({
                 "특성": feat_names,
                 "값":   [feats[f] for f in feat_names],
                 "설명": feat_descs
-            })
-            st.markdown("**분자 특성값**")
-            st.dataframe(feat_df, hide_index=True, use_container_width=True)
+            }), hide_index=True, use_container_width=True)
 
         with c4:
             shap_ser = pd.Series(shap_mean, index=FEATURES_REG).sort_values(ascending=True)
@@ -478,17 +524,21 @@ if run:
             )
             st.plotly_chart(fig_shap, use_container_width=True)
 
-        fig_dist = px.scatter(
-            df_train, x="MW", y="bp_exp", color="HB_type",
-            hover_name="name",
-            color_discrete_map={
-                "Strong":"#e53e3e","Weak":"#d97706","NonPolar":"#2d6a9f"
-            },
-            labels={"MW":"분자량 (g/mol)","bp_exp":"끓는점 (°C)","HB_type":"유형"},
-            title="전체 데이터셋 분포 (★ = 현재 입력 분자)"
+        # 전체 데이터 분포 (K 또는 °C)
+        df_plot = df_train.copy()
+        df_plot["bp_display"] = df_plot["bp_exp"].apply(
+            lambda x: c_to_k(x) if use_kelvin else x
         )
+        fig_dist = px.scatter(
+            df_plot, x="MW", y="bp_display", color="HB_type",
+            hover_name="name",
+            color_discrete_map={"Strong":"#e53e3e","Weak":"#d97706","NonPolar":"#2d6a9f"},
+            labels={"MW":"분자량 (g/mol)","bp_display":fmt_label(use_kelvin),"HB_type":"유형"},
+            title=f"전체 데이터셋 분포 (★ = 현재 입력 분자) — {unit_str}"
+        )
+        rf_disp = c_to_k(rf_pred) if use_kelvin else rf_pred
         fig_dist.add_trace(go.Scatter(
-            x=[feats['MW']], y=[rf_pred],
+            x=[feats['MW']], y=[rf_disp],
             mode='markers',
             marker=dict(symbol='star', size=18, color='#16a34a',
                         line=dict(color='white', width=1.5)),
@@ -505,6 +555,8 @@ if run:
     # ═══ TAB 4 ═══════════════════════════════════════════════
     with tab4:
         st.markdown("**분자 정보 요약**")
+        ens_disp2 = c_to_k(ensemble) if use_kelvin else ensemble
+        rf_disp2  = c_to_k(rf_pred) if use_kelvin else rf_pred
         summary_items = [
             ("SMILES", input_smi),
             ("분자량", f"{feats['MW']:.3f} g/mol"),
@@ -515,17 +567,17 @@ if run:
             ("회전 결합", str(feats['RotBonds'])),
             ("중원자 수", str(feats['HeavyAtoms'])),
             ("수소결합 유형", f"{hb_emoji} {hb_pred} ({hb_ko})"),
-            ("RF 예측 끓는점", f"{rf_pred:.1f}°C"),
-            ("앙상블 평균", f"{ensemble:.1f}°C"),
+            (f"RF 예측 끓는점", f"{rf_disp2:.2f} {unit_str}"),
+            (f"앙상블 평균", f"{ens_disp2:.2f} {unit_str}"),
         ]
-        if real_bp:
-            summary_items.append(("실제 끓는점", f"{real_bp:.1f}°C"))
+        if real_bp is not None:
+            real_disp3 = c_to_k(real_bp) if use_kelvin else real_bp
+            summary_items.append((f"실제 끓는점", f"{real_disp3:.2f} {unit_str}"))
 
-        summary_df = pd.DataFrame(summary_items, columns=["항목","값"])
-        st.dataframe(summary_df, hide_index=True, use_container_width=True)
-
+        st.dataframe(pd.DataFrame(summary_items, columns=["항목","값"]),
+                    hide_index=True, use_container_width=True)
         st.markdown("---")
         st.info(
-            "💡 **3D 구조 시각화**: Colab의 Py3Dmol 코드를 실행하면 "
-            "3D 분자 구조 위에 예측 끓는점이 오버레이된 시각화를 확인할 수 있습니다."
+            f"💡 현재 단위: **{'켈빈(K) — 절대온도, 화학Ⅱ 기준' if use_kelvin else '섭씨(°C)'}**\n\n"
+            f"켈빈 변환: K = °C + 273.15  |  물의 끓는점 = {fmt(100, use_kelvin)}"
         )
